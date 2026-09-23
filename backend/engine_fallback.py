@@ -27,7 +27,7 @@ def process_teaching(topic, concepts, state, history, message) -> dict:
     return {"state": new_state, "bot_reply": reply}
 
 
-def run_quiz(topic, concepts, state) -> list:
+def def run_quiz(topic, concepts, state, history=None) -> list:
     out = []
     for c in concepts:
         ok = state.get(c["id"]) == "correct"

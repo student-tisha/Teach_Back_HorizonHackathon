@@ -140,7 +140,7 @@ def teach(body: TeachMsg):
 @app.post("/api/quiz")
 def quiz(body: SessionRef):
     data = _load(body.session_id)
-    questions, used_fb = _call("run_quiz", data["topic"], data["concepts"], data["state"])
+    questions, used_fb = _call("run_quiz", data["topic"], data["concepts"], data["state"], data["messages"])
     correct = sum(1 for q in questions if q["correct"])
     return {
         "questions": questions,
