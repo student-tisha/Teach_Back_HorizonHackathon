@@ -1,4 +1,6 @@
+import logging
 import os
+import time
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -8,8 +10,12 @@ from pydantic import BaseModel
 load_dotenv()
 
 import engine  # noqa: E402
+import engine_fallback as fallback  # noqa: E402
 import storage  # noqa: E402
 from concepts import PRESET_TOPICS  # noqa: E402
+
+log = logging.getLogger("teachbot")
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Teachable AI Bot API")
 
@@ -41,6 +47,24 @@ class SessionRef(BaseModel):
     session_id: str
 
 
+def _call(name, *args):
+    """Try main engine (1 retry), else fallback. Returns (result, used_fallback)."""
+    if os.getenv("FORCE_FALLBACK") == "1":
+        return getattr(fallback, name)(*args), True
+    for attempt in range(2):
+        try:
+            return getattr(engine, name)(*args), False
+        except Exception as e:
+            log.warning("engine.%s failed (attempt %d): %s", name, attempt + 1, e)
+            if attempt == 0:
+                time.sleep(1)
+    try:
+        return getattr(fallback, name)(*args), True
+    except Exception as e:
+        log.error("fallback.%s failed: %s", name, e)
+        raise HTTPException(503, "Bot is busy. Please retry.")
+
+
 def _load(sid):
     data = storage.get_session(sid)
     if not data:
@@ -57,7 +81,7 @@ def _public_map(data):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "force_fallback": os.getenv("FORCE_FALLBACK") == "1"}
 
 
 @app.get("/api/topics")
@@ -82,12 +106,14 @@ def start_custom(body: CustomTopic):
     title = body.topic.strip()
     if not title:
         raise HTTPException(400, "Topic is empty")
-    try:
-        concepts = engine.generate_concepts(title)
-    except Exception:
-        raise HTTPException(503, "Concept generation failed. Try a preset topic.")
+    concepts, used_fb = _call("generate_concepts", title)
     sid, data = storage.create_session(title, concepts)
-    return {"session_id": sid, "topic": data["topic"], "knowledge_map": _public_map(data)}
+    return {
+        "session_id": sid,
+        "topic": data["topic"],
+        "knowledge_map": _public_map(data),
+        "fallback": used_fb,
+    }
 
 
 @app.post("/api/teach")
@@ -96,40 +122,42 @@ def teach(body: TeachMsg):
     msg = body.message.strip()
     if not msg:
         raise HTTPException(400, "Message is empty")
-    try:
-        result = engine.process_teaching(
-            data["topic"], data["concepts"], data["state"], data["messages"], msg
-        )
-    except Exception:
-        raise HTTPException(503, "Bot is busy. Please retry.")
+    result, used_fb = _call(
+        "process_teaching",
+        data["topic"], data["concepts"], data["state"], data["messages"], msg,
+    )
     data["state"] = result["state"]
     data["messages"].append({"role": "student", "text": msg})
     data["messages"].append({"role": "bot", "text": result["bot_reply"]})
     storage.save_session(body.session_id, data)
-    return {"bot_reply": result["bot_reply"], "knowledge_map": _public_map(data)}
+    return {
+        "bot_reply": result["bot_reply"],
+        "knowledge_map": _public_map(data),
+        "fallback": used_fb,
+    }
 
 
 @app.post("/api/quiz")
 def quiz(body: SessionRef):
     data = _load(body.session_id)
-    try:
-        questions = engine.run_quiz(data["topic"], data["concepts"], data["state"])
-    except Exception:
-        raise HTTPException(503, "Quiz failed. Please retry.")
+    questions, used_fb = _call("run_quiz", data["topic"], data["concepts"], data["state"])
     correct = sum(1 for q in questions if q["correct"])
-    return {"questions": questions, "correct": correct, "total": len(questions)}
+    return {
+        "questions": questions,
+        "correct": correct,
+        "total": len(questions),
+        "fallback": used_fb,
+    }
 
 
 @app.post("/api/report")
 def report(body: SessionRef):
     data = _load(body.session_id)
-    try:
-        rep = engine.score_teaching(
-            data["topic"], data["concepts"], data["state"], data["messages"]
-        )
-    except Exception:
-        raise HTTPException(503, "Report failed. Please retry.")
-    return {**rep, "knowledge_map": _public_map(data)}
+    rep, used_fb = _call(
+        "score_teaching",
+        data["topic"], data["concepts"], data["state"], data["messages"],
+    )
+    return {**rep, "knowledge_map": _public_map(data), "fallback": used_fb}
 
 
 @app.get("/api/session/{session_id}")
