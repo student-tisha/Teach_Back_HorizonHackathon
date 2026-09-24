@@ -3,7 +3,7 @@
 An AI "student" that **you teach**. The bot learns from your explanation, asks follow-up questions, and is then quizzed using only what you taught it. Teaching helps you learn faster.
 
 **Live demo:** <frontend link>
-**API docs:** https://YOUR-APP.onrender.com/docs
+**API docs:** https://teach-back-horizonhackathon.onrender.com
 **Demo video:** <link>
 
 ## How it works
