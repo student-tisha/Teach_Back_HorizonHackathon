@@ -1,5 +1,6 @@
 const USE_MOCK = false; // true = fake data, false = real API
-const BASE_URL = "https://teach-back-horizonhackathon.onrender.com"; // no "/" at the end
+// const BASE_URL = "https://teach-back-horizonhackathon.onrender.com"; // no "/" at the end
+const BASE_URL = "https://teachback-backend-og1m.onrender.com"; // no "/" at the end
 
 const PATHS = {
   topics: "/api/topics",
