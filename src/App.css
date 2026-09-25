@@ -1,0 +1,363 @@
+import { useEffect, useRef, useState } from "react";
+import { getTopics, startSession, teach, getQuiz, getReport } from "./api";
+
+const STATUS_LABEL = {
+  unknown: "Not taught yet",
+  partial: "Partially learned",
+  correct: "Understood",
+  misconception: "Misconception",
+};
+
+export default function App() {
+  const [screen, setScreen] = useState("landing");
+  const [topics, setTopics] = useState([]);
+  const [customTopic, setCustomTopic] = useState("");
+  const [topic, setTopic] = useState("");
+  const [sessionId, setSessionId] = useState("");
+  const [messages, setMessages] = useState([]);
+  const [concepts, setConcepts] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [quiz, setQuiz] = useState([]);
+  const [report, setReport] = useState(null);
+  const [listening, setListening] = useState(false);
+  const endRef = useRef(null);
+
+  useEffect(() => {
+    getTopics()
+      .then(setTopics)
+      .catch(() => setError("Could not load topics."));
+  }, []);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  const startTopic = async (name) => {
+    const t = name.trim();
+    if (!t || loading) return;
+    setLoading(true);
+    setError("");
+    try {
+      const res = await startSession(t);
+      if (!res.concepts || res.concepts.length === 0) {
+        setError("Custom topics need the real API. Pick a preset topic for now.");
+        setLoading(false);
+        return;
+      }
+      setTopic(t);
+      setSessionId(res.session_id);
+      setConcepts(res.concepts);
+      setMessages([{ role: "bot", text: res.reply }]);
+      setScreen("teach");
+    } catch (e) {
+      setError("Could not start. Please try again.");
+    }
+    setLoading(false);
+  };
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput("");
+    setError("");
+    setMessages((m) => [...m, { role: "user", text }]);
+    setLoading(true);
+    try {
+      const res = await teach(sessionId, text);
+      setConcepts(res.concepts);
+      setMessages((m) => [...m, { role: "bot", text: res.reply }]);
+    } catch (e) {
+      setError("Something went wrong. Please try again.");
+    }
+    setLoading(false);
+  };
+
+  const onKey = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  };
+
+  const startVoice = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      setError("Voice input is not supported. Use Chrome.");
+      return;
+    }
+    const rec = new SR();
+    rec.lang = "en-US";
+    rec.onstart = () => setListening(true);
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    rec.onresult = (e) => {
+      const said = e.results[0][0].transcript;
+      setInput((p) => (p ? p + " " : "") + said);
+    };
+    rec.start();
+  };
+
+  const goQuiz = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const q = await getQuiz(sessionId);
+      setQuiz(q);
+      setScreen("quiz");
+    } catch (e) {
+      setError("Could not load quiz.");
+    }
+    setLoading(false);
+  };
+
+  const goReport = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const r = await getReport(sessionId);
+      setReport(r);
+      setScreen("report");
+    } catch (e) {
+      setError("Could not load report.");
+    }
+    setLoading(false);
+  };
+
+  const restart = () => {
+    setScreen("landing");
+    setMessages([]);
+    setConcepts([]);
+    setQuiz([]);
+    setReport(null);
+    setError("");
+  };
+
+  const total = concepts.length || 1;
+  const full = concepts.filter((c) => c.status === "correct").length;
+  const part = concepts.filter((c) => c.status === "partial").length;
+  const progress = Math.round(((full + part * 0.5) / total) * 100);
+
+  /* ---------------- LANDING ---------------- */
+  if (screen === "landing") {
+    return (
+      <div className="landing">
+        <h1>
+          Teach the bot. <span>Learn faster.</span>
+        </h1>
+        <p>
+          Meet a curious AI student. Explain a topic to it, answer its questions,
+          and watch your own understanding grow.
+        </p>
+        <div className="topic-grid">
+          {topics.map((t) => (
+            <button
+              key={t}
+              className="topic-card"
+              disabled={loading}
+              onClick={() => startTopic(t)}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+        <div className="custom-topic">
+          <input
+            placeholder="Or type your own topic..."
+            value={customTopic}
+            onChange={(e) => setCustomTopic(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && startTopic(customTopic)}
+          />
+          <button
+            className="btn btn-primary"
+            disabled={loading || !customTopic.trim()}
+            onClick={() => startTopic(customTopic)}
+          >
+            {loading ? "Starting..." : "Start teaching"}
+          </button>
+        </div>
+        {error && <div className="error">{error}</div>}
+      </div>
+    );
+  }
+
+  /* ---------------- TEACH ---------------- */
+  if (screen === "teach") {
+    return (
+      <div className="shell">
+        <div className="topbar">
+          <div>
+            <h2>Teaching: {topic}</h2>
+            <div className="sub">Explain in your own words. The bot learns from you.</div>
+          </div>
+          <div className="row">
+            <button className="btn" onClick={restart}>
+              Change topic
+            </button>
+            <button className="btn btn-primary" disabled={loading} onClick={goQuiz}>
+              Take the quiz
+            </button>
+          </div>
+        </div>
+
+        <div className="teach-layout">
+          <div className="chat">
+            <div className="messages">
+              {messages.map((m, i) => (
+                <div key={i} className={"msg " + m.role}>
+                  {m.text}
+                </div>
+              ))}
+              {loading && <div className="msg bot typing">Bot is thinking...</div>}
+              <div ref={endRef} />
+            </div>
+            {error && <div className="error" style={{ padding: "0 16px" }}>{error}</div>}
+            <div className="chat-input">
+              <button
+                className={"mic" + (listening ? " on" : "")}
+                onClick={startVoice}
+                title="Voice input"
+              >
+                🎤
+              </button>
+              <textarea
+                placeholder="Teach the bot here... (Enter to send)"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={onKey}
+              />
+              <button className="btn btn-primary" disabled={loading || !input.trim()} onClick={send}>
+                Send
+              </button>
+            </div>
+          </div>
+
+          <div className="map-panel">
+            <h3>Knowledge map</h3>
+            <div className="progress">
+              <div style={{ width: progress + "%" }} />
+            </div>
+            <div className="sub" style={{ color: "var(--muted)", fontSize: 13 }}>
+              Bot's understanding: {progress}%
+            </div>
+            <div className="legend">
+              <span><i className="dot g" /> Understood</span>
+              <span><i className="dot y" /> Partial</span>
+              <span><i className="dot r" /> Wrong</span>
+              <span><i className="dot n" /> Not taught</span>
+            </div>
+            {concepts.map((c) => (
+              <div key={c.id} className={"concept s-" + c.status}>
+                <span className="dot" />
+                <div>
+                  {c.name}
+                  <small>{STATUS_LABEL[c.status] || c.status}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ---------------- QUIZ ---------------- */
+  if (screen === "quiz") {
+    return (
+      <div className="shell">
+        <div className="topbar">
+          <div>
+            <h2>Quiz: {topic}</h2>
+            <div className="sub">The bot answers using only what you taught it.</div>
+          </div>
+        </div>
+        <div className="page">
+          <div className="page-inner">
+            <h1>Bot's quiz answers</h1>
+            {quiz.map((q) => (
+              <div key={q.id} className="quiz-card">
+                <div className="q">{q.question}</div>
+                <div className="a">{q.bot_answer}</div>
+                <span className={"badge " + (q.correct ? "ok" : "bad")}>
+                  {q.correct ? "Correct" : "Needs teaching"}
+                </span>
+              </div>
+            ))}
+            {error && <div className="error">{error}</div>}
+            <div className="row">
+              <button className="btn" onClick={() => setScreen("teach")}>
+                Teach more
+              </button>
+              <button className="btn btn-primary" disabled={loading} onClick={goReport}>
+                {loading ? "Loading..." : "See report card"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ---------------- REPORT ---------------- */
+  return (
+    <div className="shell">
+      <div className="topbar">
+        <div>
+          <h2>Teaching report card</h2>
+          <div className="sub">Topic: {topic}</div>
+        </div>
+      </div>
+      <div className="page">
+        <div className="page-inner">
+          <div className="score-wrap">
+            <div className="score-circle">
+              {report?.score ?? 0}
+              <small>Teaching score</small>
+            </div>
+          </div>
+
+          <div className="report-box good">
+            <h3>Strengths</h3>
+            <ul>
+              {report?.strengths?.length ? (
+                report.strengths.map((s, i) => <li key={i}>{s}</li>)
+              ) : (
+                <li>Nothing yet. Teach more concepts.</li>
+              )}
+            </ul>
+          </div>
+
+          <div className="report-box warn">
+            <h3>Gaps to improve</h3>
+            <ul>
+              {report?.gaps?.length ? (
+                report.gaps.map((g, i) => <li key={i}>{g}</li>)
+              ) : (
+                <li>No gaps. Great teaching!</li>
+              )}
+            </ul>
+          </div>
+
+          <div className="report-box tip">
+            <h3>Tips</h3>
+            <ul>
+              {(report?.tips || []).map((t, i) => (
+                <li key={i}>{t}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="row">
+            <button className="btn" onClick={() => setScreen("teach")}>
+              Teach more
+            </button>
+            <button className="btn btn-primary" onClick={restart}>
+              New topic
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
